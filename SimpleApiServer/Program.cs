@@ -47,6 +47,7 @@ namespace SimpleApiServer
             Console.WriteLine("Endpoint: GET /api/tasks");
             Console.WriteLine("Endpoint: GET /api/tasks/{id}");
             Console.WriteLine("Endpoint: POST /api/tasks");
+            Console.WriteLine("Endpoint: PUT /api/tasks/{id}");
             Console.WriteLine("Для остановки нажмите Ctrl + C");
 
             while (true)
@@ -82,6 +83,20 @@ namespace SimpleApiServer
                 {
                     HandleCreateTask(request, response);
                 }
+                else if (method == "PUT" && path.StartsWith("/api/tasks/"))
+                {
+                    string idPart = path.Substring("/api/tasks/".Length);
+                    int id;
+
+                    if (int.TryParse(idPart, out id))
+                    {
+                        HandleUpdateTask(request, response, id);
+                    }
+                    else
+                    {
+                        WriteError(response, 400, "Неверный id", "INVALID_ID");
+                    }
+                }
                 else
                 {
                     WriteError(response, 404, "Маршрут не найден", "ROUTE_NOT_FOUND");
@@ -93,6 +108,7 @@ namespace SimpleApiServer
         {
             return new JsonSerializerOptions
             {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
             };
         }
@@ -182,13 +198,7 @@ namespace SimpleApiServer
 
         static void HandleCreateTask(HttpListenerRequest request, HttpListenerResponse response)
         {
-            Stream body = request.InputStream;
-            string requestBody = "";
-
-            using (StreamReader reader = new StreamReader(body, Encoding.UTF8))
-            {
-                requestBody = reader.ReadToEnd();
-            }
+            string requestBody = ReadRequestBody(request);
 
             if (string.IsNullOrWhiteSpace(requestBody))
             {
@@ -198,23 +208,19 @@ namespace SimpleApiServer
 
             try
             {
-                TaskItem newTask = JsonSerializer.Deserialize<TaskItem>(requestBody, GetJsonOptions());
+                CreateTaskRequest newTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
 
-                if (newTask == null)
+                if (newTaskRequest == null)
                 {
                     WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
                     return;
                 }
 
-                if (string.IsNullOrWhiteSpace(newTask.Title))
-                {
-                    WriteError(response, 400, "Поле Title обязательно", "TITLE_REQUIRED");
-                    return;
-                }
+                List<object> validationErrors = ValidateTaskRequest(newTaskRequest);
 
-                if (newTask.Priority < 1 || newTask.Priority > 3)
+                if (validationErrors.Count > 0)
                 {
-                    WriteError(response, 400, "Поле Priority должно быть в диапазоне от 1 до 3", "INVALID_PRIORITY_RANGE");
+                    WriteValidationError(response, validationErrors);
                     return;
                 }
 
@@ -225,15 +231,151 @@ namespace SimpleApiServer
                     newId = _tasks[_tasks.Count - 1].Id + 1;
                 }
 
-                newTask.Id = newId;
+                TaskItem newTask = new TaskItem
+                {
+                    Id = newId,
+                    Title = newTaskRequest.Title.Trim(),
+                    Description = newTaskRequest.Description,
+                    IsCompleted = newTaskRequest.IsCompleted ?? false,
+                    Priority = newTaskRequest.Priority ?? 1
+                };
+
                 _tasks.Add(newTask);
 
                 WriteSuccess(response, newTask, 201);
             }
             catch
             {
-                WriteError(response, 400, "Неверный JSON", "INVALID_JSON");
+                WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
             }
+        }
+
+        static void HandleUpdateTask(HttpListenerRequest request, HttpListenerResponse response, int id)
+        {
+            TaskItem foundTask = null;
+
+            foreach (TaskItem task in _tasks)
+            {
+                if (task.Id == id)
+                {
+                    foundTask = task;
+                    break;
+                }
+            }
+
+            if (foundTask == null)
+            {
+                WriteError(response, 404, "Задача не найдена", "TASK_NOT_FOUND");
+                return;
+            }
+
+            string requestBody = ReadRequestBody(request);
+
+            if (string.IsNullOrWhiteSpace(requestBody))
+            {
+                WriteError(response, 400, "Пустое тело запроса", "EMPTY_BODY");
+                return;
+            }
+
+            try
+            {
+                CreateTaskRequest updateTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
+
+                if (updateTaskRequest == null)
+                {
+                    WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
+                    return;
+                }
+
+                List<object> validationErrors = ValidateTaskRequest(updateTaskRequest);
+
+                if (validationErrors.Count > 0)
+                {
+                    WriteValidationError(response, validationErrors);
+                    return;
+                }
+
+                foundTask.Title = updateTaskRequest.Title.Trim();
+                foundTask.Description = updateTaskRequest.Description;
+                foundTask.IsCompleted = updateTaskRequest.IsCompleted ?? false;
+                foundTask.Priority = updateTaskRequest.Priority ?? 1;
+
+                WriteSuccess(response, foundTask, 200);
+            }
+            catch
+            {
+                WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+            }
+        }
+
+        static string ReadRequestBody(HttpListenerRequest request)
+        {
+            using (StreamReader reader = new StreamReader(request.InputStream, Encoding.UTF8))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
+        static List<object> ValidateTaskRequest(CreateTaskRequest taskRequest)
+        {
+            List<object> errors = new List<object>();
+
+            if (string.IsNullOrWhiteSpace(taskRequest.Title))
+            {
+                errors.Add(new
+                {
+                    field = "Title",
+                    message = "Название обязательно"
+                });
+            }
+            else if (taskRequest.Title.Trim().Length > 200)
+            {
+                errors.Add(new
+                {
+                    field = "Title",
+                    message = "Название не должно превышать 200 символов"
+                });
+            }
+
+            if (!string.IsNullOrEmpty(taskRequest.Description) && taskRequest.Description.Length > 1000)
+            {
+                errors.Add(new
+                {
+                    field = "Description",
+                    message = "Описание не должно превышать 1000 символов"
+                });
+            }
+
+            if (!taskRequest.Priority.HasValue)
+            {
+                errors.Add(new
+                {
+                    field = "Priority",
+                    message = "Приоритет обязателен"
+                });
+            }
+            else if (taskRequest.Priority.Value < 1 || taskRequest.Priority.Value > 3)
+            {
+                errors.Add(new
+                {
+                    field = "Priority",
+                    message = "Приоритет должен быть в диапазоне от 1 до 3"
+                });
+            }
+
+            return errors;
+        }
+
+        static void WriteValidationError(HttpListenerResponse response, List<object> errors)
+        {
+            var result = new
+            {
+                error = "Ошибка валидации",
+                errors = errors
+            };
+
+            string json = JsonSerializer.Serialize(result, GetJsonOptions());
+            WriteJsonResponse(response, json, 400);
         }
 
         static void WriteJsonResponse(HttpListenerResponse response, string json, int statusCode)
@@ -242,17 +384,6 @@ namespace SimpleApiServer
 
             response.StatusCode = statusCode;
             response.ContentType = "application/json; charset=utf-8";
-            response.ContentLength64 = buffer.Length;
-            response.OutputStream.Write(buffer, 0, buffer.Length);
-            response.OutputStream.Close();
-        }
-
-        static void WriteTextResponse(HttpListenerResponse response, string text, int statusCode)
-        {
-            byte[] buffer = Encoding.UTF8.GetBytes(text);
-
-            response.StatusCode = statusCode;
-            response.ContentType = "text/plain; charset=utf-8";
             response.ContentLength64 = buffer.Length;
             response.OutputStream.Write(buffer, 0, buffer.Length);
             response.OutputStream.Close();
