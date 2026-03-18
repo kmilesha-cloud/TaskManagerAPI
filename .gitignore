@@ -1,1 +1,9 @@
 .DS_Store
+.vs/
+bin/
+obj/
+packages/
+SimpleApiServer/.vs/
+SimpleApiServer/bin/
+SimpleApiServer/obj/
+SimpleApiServer/packages/
