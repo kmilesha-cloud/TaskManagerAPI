@@ -4,6 +4,10 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Security.Claims;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace SimpleApiServer
 {
@@ -37,6 +41,12 @@ namespace SimpleApiServer
             }
         };
 
+        static List<User> _users = new List<User>();
+
+        static string JwtSecret = "super_secret_key_12345_super_secret_key";
+        static string JwtIssuer = "SimpleApiServer";
+        static string JwtAudience = "SimpleApiServerClient";
+
         static void Main(string[] args)
         {
             HttpListener listener = new HttpListener();
@@ -48,6 +58,8 @@ namespace SimpleApiServer
             Console.WriteLine("Endpoint: GET /api/tasks/{id}");
             Console.WriteLine("Endpoint: POST /api/tasks");
             Console.WriteLine("Endpoint: PUT /api/tasks/{id}");
+            Console.WriteLine("Endpoint: POST /api/auth/register");
+            Console.WriteLine("Endpoint: POST /api/auth/login");
             Console.WriteLine("Для остановки нажмите Ctrl + C");
 
             while (true)
@@ -96,6 +108,14 @@ namespace SimpleApiServer
                     {
                         WriteError(response, 400, "Неверный id", "INVALID_ID");
                     }
+                }
+                else if (method == "POST" && path == "/api/auth/register")
+                {
+                    HandleRegister(request, response);
+                }
+                else if (method == "POST" && path == "/api/auth/login")
+                {
+                    HandleLogin(request, response);
                 }
                 else
                 {
@@ -198,6 +218,12 @@ namespace SimpleApiServer
 
         static void HandleCreateTask(HttpListenerRequest request, HttpListenerResponse response)
         {
+            if (!TryValidateToken(request))
+            {
+                WriteUnauthorized(response, "Требуется авторизация");
+                return;
+            }
+
             string requestBody = ReadRequestBody(request);
 
             if (string.IsNullOrWhiteSpace(requestBody))
@@ -252,6 +278,14 @@ namespace SimpleApiServer
 
         static void HandleUpdateTask(HttpListenerRequest request, HttpListenerResponse response, int id)
         {
+            string requestBody = ReadRequestBody(request);
+
+            if (string.IsNullOrWhiteSpace(requestBody))
+            {
+                WriteError(response, 400, "Пустое тело запроса", "EMPTY_BODY");
+                return;
+            }
+
             TaskItem foundTask = null;
 
             foreach (TaskItem task in _tasks)
@@ -266,14 +300,6 @@ namespace SimpleApiServer
             if (foundTask == null)
             {
                 WriteError(response, 404, "Задача не найдена", "TASK_NOT_FOUND");
-                return;
-            }
-
-            string requestBody = ReadRequestBody(request);
-
-            if (string.IsNullOrWhiteSpace(requestBody))
-            {
-                WriteError(response, 400, "Пустое тело запроса", "EMPTY_BODY");
                 return;
             }
 
@@ -301,6 +327,127 @@ namespace SimpleApiServer
                 foundTask.Priority = updateTaskRequest.Priority ?? 1;
 
                 WriteSuccess(response, foundTask, 200);
+            }
+            catch
+            {
+                WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+            }
+        }
+
+        static void HandleRegister(HttpListenerRequest request, HttpListenerResponse response)
+        {
+            string requestBody = ReadRequestBody(request);
+
+            if (string.IsNullOrWhiteSpace(requestBody))
+            {
+                WriteError(response, 400, "Пустое тело запроса", "EMPTY_BODY");
+                return;
+            }
+
+            try
+            {
+                AuthRequest registerRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
+
+                if (registerRequest == null ||
+                    string.IsNullOrWhiteSpace(registerRequest.Email) ||
+                    string.IsNullOrWhiteSpace(registerRequest.Password))
+                {
+                    WriteError(response, 400, "Email и Password обязательны", "INVALID_REGISTER_DATA");
+                    return;
+                }
+
+                foreach (User user in _users)
+                {
+                    if (user.Email.ToLower() == registerRequest.Email.ToLower())
+                    {
+                        WriteError(response, 400, "Пользователь с таким email уже существует", "EMAIL_ALREADY_EXISTS");
+                        return;
+                    }
+                }
+
+                int newId = _users.Count + 1;
+
+                User newUser = new User
+                {
+                    Id = newId,
+                    Email = registerRequest.Email,
+                    PasswordHash = HashPassword(registerRequest.Password),
+                    Name = registerRequest.Name
+                };
+
+                _users.Add(newUser);
+
+                WriteSuccess(response, new
+                {
+                    message = "Пользователь зарегистрирован",
+                    email = newUser.Email
+                }, 201);
+            }
+            catch
+            {
+                WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+            }
+        }
+
+        static void HandleLogin(HttpListenerRequest request, HttpListenerResponse response)
+        {
+            string requestBody = ReadRequestBody(request);
+
+            if (string.IsNullOrWhiteSpace(requestBody))
+            {
+                WriteError(response, 400, "Пустое тело запроса", "EMPTY_BODY");
+                return;
+            }
+
+            try
+            {
+                AuthRequest loginRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
+
+                if (loginRequest == null ||
+                    string.IsNullOrWhiteSpace(loginRequest.Email) ||
+                    string.IsNullOrWhiteSpace(loginRequest.Password))
+                {
+                    WriteUnauthorized(response, "Неверный email или пароль");
+                    return;
+                }
+
+                User foundUser = null;
+
+                foreach (User user in _users)
+                {
+                    if (user.Email.ToLower() == loginRequest.Email.ToLower())
+                    {
+                        foundUser = user;
+                        break;
+                    }
+                }
+
+                if (foundUser == null)
+                {
+                    WriteUnauthorized(response, "Неверный email или пароль");
+                    return;
+                }
+
+                string passwordHash = HashPassword(loginRequest.Password);
+
+                if (foundUser.PasswordHash != passwordHash)
+                {
+                    WriteUnauthorized(response, "Неверный email или пароль");
+                    return;
+                }
+
+                DateTime expiresAt;
+                string token = GenerateJwtToken(foundUser, out expiresAt);
+
+                var result = new
+                {
+                    token = token,
+                    email = foundUser.Email,
+                    expiresAt = expiresAt
+                };
+
+                string json = JsonSerializer.Serialize(result, GetJsonOptions());
+                WriteJsonResponse(response, json, 200);
             }
             catch
             {
@@ -366,6 +513,84 @@ namespace SimpleApiServer
             return errors;
         }
 
+        static string HashPassword(string password)
+        {
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(password);
+                byte[] hash = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hash);
+            }
+        }
+
+        static string GenerateJwtToken(User user, out DateTime expiresAt)
+        {
+            expiresAt = DateTime.UtcNow.AddHours(1);
+
+            byte[] keyBytes = Encoding.UTF8.GetBytes(JwtSecret);
+            SymmetricSecurityKey key = new SymmetricSecurityKey(keyBytes);
+            SigningCredentials credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            Claim[] claims = new Claim[]
+            {
+                new Claim("id", user.Id.ToString()),
+                new Claim("email", user.Email)
+            };
+
+            JwtSecurityToken token = new JwtSecurityToken(
+                issuer: JwtIssuer,
+                audience: JwtAudience,
+                claims: claims,
+                expires: expiresAt,
+                signingCredentials: credentials
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
+        static bool TryValidateToken(HttpListenerRequest request)
+        {
+            string authHeader = request.Headers["Authorization"];
+
+            if (string.IsNullOrWhiteSpace(authHeader))
+            {
+                return false;
+            }
+
+            if (!authHeader.StartsWith("Bearer "))
+            {
+                return false;
+            }
+
+            string token = authHeader.Substring("Bearer ".Length).Trim();
+
+            try
+            {
+                byte[] keyBytes = Encoding.UTF8.GetBytes(JwtSecret);
+
+                TokenValidationParameters parameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = JwtIssuer,
+                    ValidateAudience = true,
+                    ValidAudience = JwtAudience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                };
+
+                JwtSecurityTokenHandler handler = new JwtSecurityTokenHandler();
+                handler.ValidateToken(token, parameters, out _);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         static void WriteValidationError(HttpListenerResponse response, List<object> errors)
         {
             var result = new
@@ -376,6 +601,18 @@ namespace SimpleApiServer
 
             string json = JsonSerializer.Serialize(result, GetJsonOptions());
             WriteJsonResponse(response, json, 400);
+        }
+
+        static void WriteUnauthorized(HttpListenerResponse response, string message)
+        {
+            var result = new
+            {
+                error = "Unauthorized",
+                message = message
+            };
+
+            string json = JsonSerializer.Serialize(result, GetJsonOptions());
+            WriteJsonResponse(response, json, 401);
         }
 
         static void WriteJsonResponse(HttpListenerResponse response, string json, int statusCode)
@@ -389,7 +626,7 @@ namespace SimpleApiServer
             response.OutputStream.Close();
         }
 
-        static void WriteSuccess(HttpListenerResponse response, object data, int statusCode = 200)
+        static void WriteSuccess(HttpListenerResponse response, object data, int statusCode)
         {
             var result = new
             {
