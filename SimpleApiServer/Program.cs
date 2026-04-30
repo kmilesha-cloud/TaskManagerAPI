@@ -73,53 +73,69 @@ namespace SimpleApiServer
 
                 Console.WriteLine("Запрос: " + method + " " + path);
 
-                if (method == "GET" && path == "/api/tasks")
+                try
                 {
-                    HandleGetTasks(request, response);
-                }
-                else if (method == "GET" && path.StartsWith("/api/tasks/"))
-                {
-                    string idPart = path.Substring("/api/tasks/".Length);
-                    int id;
-
-                    if (int.TryParse(idPart, out id))
+                    if (method == "GET" && path == "/api/tasks")
                     {
-                        HandleGetTaskById(response, id);
+                        HandleGetTasks(request, response);
+                    }
+                    else if (method == "GET" && path.StartsWith("/api/tasks/"))
+                    {
+                        string idPart = path.Substring("/api/tasks/".Length);
+                        int id;
+
+                        if (int.TryParse(idPart, out id))
+                        {
+                            HandleGetTaskById(response, id);
+                        }
+                        else
+                        {
+                            WriteError(response, 400, "Неверный id", "INVALID_ID");
+                        }
+                    }
+                    else if (method == "POST" && path == "/api/tasks")
+                    {
+                        HandleCreateTask(request, response);
+                    }
+                    else if (method == "PUT" && path.StartsWith("/api/tasks/"))
+                    {
+                        string idPart = path.Substring("/api/tasks/".Length);
+                        int id;
+
+                        if (int.TryParse(idPart, out id))
+                        {
+                            HandleUpdateTask(request, response, id);
+                        }
+                        else
+                        {
+                            WriteError(response, 400, "Неверный id", "INVALID_ID");
+                        }
+                    }
+                    else if (method == "POST" && path == "/api/auth/register")
+                    {
+                        HandleRegister(request, response);
+                    }
+                    else if (method == "POST" && path == "/api/auth/login")
+                    {
+                        HandleLogin(request, response);
                     }
                     else
                     {
-                        WriteError(response, 400, "Неверный id", "INVALID_ID");
+                        WriteError(response, 404, "Маршрут не найден", "ROUTE_NOT_FOUND");
                     }
                 }
-                else if (method == "POST" && path == "/api/tasks")
+                catch (Exception ex)
                 {
-                    HandleCreateTask(request, response);
-                }
-                else if (method == "PUT" && path.StartsWith("/api/tasks/"))
-                {
-                    string idPart = path.Substring("/api/tasks/".Length);
-                    int id;
+                    Console.WriteLine("Ошибка сервера: " + ex);
 
-                    if (int.TryParse(idPart, out id))
+                    var result = new
                     {
-                        HandleUpdateTask(request, response, id);
-                    }
-                    else
-                    {
-                        WriteError(response, 400, "Неверный id", "INVALID_ID");
-                    }
-                }
-                else if (method == "POST" && path == "/api/auth/register")
-                {
-                    HandleRegister(request, response);
-                }
-                else if (method == "POST" && path == "/api/auth/login")
-                {
-                    HandleLogin(request, response);
-                }
-                else
-                {
-                    WriteError(response, 404, "Маршрут не найден", "ROUTE_NOT_FOUND");
+                        error = "InternalServerError",
+                        message = "Произошла внутренняя ошибка сервера"
+                    };
+
+                    string json = JsonSerializer.Serialize(result, GetJsonOptions());
+                    WriteJsonResponse(response, json, 500);
                 }
             }
         }
@@ -232,48 +248,50 @@ namespace SimpleApiServer
                 return;
             }
 
+            CreateTaskRequest newTaskRequest;
             try
             {
-                CreateTaskRequest newTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
-
-                if (newTaskRequest == null)
-                {
-                    WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
-                    return;
-                }
-
-                List<object> validationErrors = ValidateTaskRequest(newTaskRequest);
-
-                if (validationErrors.Count > 0)
-                {
-                    WriteValidationError(response, validationErrors);
-                    return;
-                }
-
-                int newId = 1;
-
-                if (_tasks.Count > 0)
-                {
-                    newId = _tasks[_tasks.Count - 1].Id + 1;
-                }
-
-                TaskItem newTask = new TaskItem
-                {
-                    Id = newId,
-                    Title = newTaskRequest.Title.Trim(),
-                    Description = newTaskRequest.Description,
-                    IsCompleted = newTaskRequest.IsCompleted ?? false,
-                    Priority = newTaskRequest.Priority ?? 1
-                };
-
-                _tasks.Add(newTask);
-
-                WriteSuccess(response, newTask, 201);
+                newTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
             }
             catch
             {
                 WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+                return;
             }
+
+            if (newTaskRequest == null)
+            {
+                WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
+                return;
+            }
+
+            List<object> validationErrors = ValidateTaskRequest(newTaskRequest);
+
+            if (validationErrors.Count > 0)
+            {
+                WriteValidationError(response, validationErrors);
+                return;
+            }
+
+            int newId = 1;
+
+            if (_tasks.Count > 0)
+            {
+                newId = _tasks[_tasks.Count - 1].Id + 1;
+            }
+
+            TaskItem newTask = new TaskItem
+            {
+                Id = newId,
+                Title = newTaskRequest.Title.Trim(),
+                Description = newTaskRequest.Description,
+                IsCompleted = newTaskRequest.IsCompleted ?? false,
+                Priority = newTaskRequest.Priority ?? 1
+            };
+
+            _tasks.Add(newTask);
+
+            WriteSuccess(response, newTask, 201);
         }
 
         static void HandleUpdateTask(HttpListenerRequest request, HttpListenerResponse response, int id)
@@ -303,35 +321,37 @@ namespace SimpleApiServer
                 return;
             }
 
+            CreateTaskRequest updateTaskRequest;
             try
             {
-                CreateTaskRequest updateTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
-
-                if (updateTaskRequest == null)
-                {
-                    WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
-                    return;
-                }
-
-                List<object> validationErrors = ValidateTaskRequest(updateTaskRequest);
-
-                if (validationErrors.Count > 0)
-                {
-                    WriteValidationError(response, validationErrors);
-                    return;
-                }
-
-                foundTask.Title = updateTaskRequest.Title.Trim();
-                foundTask.Description = updateTaskRequest.Description;
-                foundTask.IsCompleted = updateTaskRequest.IsCompleted ?? false;
-                foundTask.Priority = updateTaskRequest.Priority ?? 1;
-
-                WriteSuccess(response, foundTask, 200);
+                updateTaskRequest = JsonSerializer.Deserialize<CreateTaskRequest>(requestBody, GetJsonOptions());
             }
             catch
             {
                 WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+                return;
             }
+
+            if (updateTaskRequest == null)
+            {
+                WriteError(response, 400, "Не удалось прочитать данные задачи", "INVALID_TASK");
+                return;
+            }
+
+            List<object> validationErrors = ValidateTaskRequest(updateTaskRequest);
+
+            if (validationErrors.Count > 0)
+            {
+                WriteValidationError(response, validationErrors);
+                return;
+            }
+
+            foundTask.Title = updateTaskRequest.Title.Trim();
+            foundTask.Description = updateTaskRequest.Description;
+            foundTask.IsCompleted = updateTaskRequest.IsCompleted ?? false;
+            foundTask.Priority = updateTaskRequest.Priority ?? 1;
+
+            WriteSuccess(response, foundTask, 200);
         }
 
         static void HandleRegister(HttpListenerRequest request, HttpListenerResponse response)
@@ -344,49 +364,51 @@ namespace SimpleApiServer
                 return;
             }
 
+            AuthRequest registerRequest;
             try
             {
-                AuthRequest registerRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
-
-                if (registerRequest == null ||
-                    string.IsNullOrWhiteSpace(registerRequest.Email) ||
-                    string.IsNullOrWhiteSpace(registerRequest.Password))
-                {
-                    WriteError(response, 400, "Email и Password обязательны", "INVALID_REGISTER_DATA");
-                    return;
-                }
-
-                foreach (User user in _users)
-                {
-                    if (user.Email.ToLower() == registerRequest.Email.ToLower())
-                    {
-                        WriteError(response, 400, "Пользователь с таким email уже существует", "EMAIL_ALREADY_EXISTS");
-                        return;
-                    }
-                }
-
-                int newId = _users.Count + 1;
-
-                User newUser = new User
-                {
-                    Id = newId,
-                    Email = registerRequest.Email,
-                    PasswordHash = HashPassword(registerRequest.Password),
-                    Name = registerRequest.Name
-                };
-
-                _users.Add(newUser);
-
-                WriteSuccess(response, new
-                {
-                    message = "Пользователь зарегистрирован",
-                    email = newUser.Email
-                }, 201);
+                registerRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
             }
             catch
             {
                 WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+                return;
             }
+
+            if (registerRequest == null ||
+                string.IsNullOrWhiteSpace(registerRequest.Email) ||
+                string.IsNullOrWhiteSpace(registerRequest.Password))
+            {
+                WriteError(response, 400, "Email и Password обязательны", "INVALID_REGISTER_DATA");
+                return;
+            }
+
+            foreach (User user in _users)
+            {
+                if (user.Email.ToLower() == registerRequest.Email.ToLower())
+                {
+                    WriteError(response, 400, "Пользователь с таким email уже существует", "EMAIL_ALREADY_EXISTS");
+                    return;
+                }
+            }
+
+            int newId = _users.Count + 1;
+
+            User newUser = new User
+            {
+                Id = newId,
+                Email = registerRequest.Email,
+                PasswordHash = HashPassword(registerRequest.Password),
+                Name = registerRequest.Name
+            };
+
+            _users.Add(newUser);
+
+            WriteSuccess(response, new
+            {
+                message = "Пользователь зарегистрирован",
+                email = newUser.Email
+            }, 201);
         }
 
         static void HandleLogin(HttpListenerRequest request, HttpListenerResponse response)
@@ -399,60 +421,62 @@ namespace SimpleApiServer
                 return;
             }
 
+            AuthRequest loginRequest;
             try
             {
-                AuthRequest loginRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
-
-                if (loginRequest == null ||
-                    string.IsNullOrWhiteSpace(loginRequest.Email) ||
-                    string.IsNullOrWhiteSpace(loginRequest.Password))
-                {
-                    WriteUnauthorized(response, "Неверный email или пароль");
-                    return;
-                }
-
-                User foundUser = null;
-
-                foreach (User user in _users)
-                {
-                    if (user.Email.ToLower() == loginRequest.Email.ToLower())
-                    {
-                        foundUser = user;
-                        break;
-                    }
-                }
-
-                if (foundUser == null)
-                {
-                    WriteUnauthorized(response, "Неверный email или пароль");
-                    return;
-                }
-
-                string passwordHash = HashPassword(loginRequest.Password);
-
-                if (foundUser.PasswordHash != passwordHash)
-                {
-                    WriteUnauthorized(response, "Неверный email или пароль");
-                    return;
-                }
-
-                DateTime expiresAt;
-                string token = GenerateJwtToken(foundUser, out expiresAt);
-
-                var result = new
-                {
-                    token = token,
-                    email = foundUser.Email,
-                    expiresAt = expiresAt
-                };
-
-                string json = JsonSerializer.Serialize(result, GetJsonOptions());
-                WriteJsonResponse(response, json, 200);
+                loginRequest = JsonSerializer.Deserialize<AuthRequest>(requestBody, GetJsonOptions());
             }
             catch
             {
                 WriteError(response, 400, "Некорректный JSON", "INVALID_JSON");
+                return;
             }
+
+            if (loginRequest == null ||
+                string.IsNullOrWhiteSpace(loginRequest.Email) ||
+                string.IsNullOrWhiteSpace(loginRequest.Password))
+            {
+                WriteUnauthorized(response, "Неверный email или пароль");
+                return;
+            }
+
+            User foundUser = null;
+
+            foreach (User user in _users)
+            {
+                if (user.Email.ToLower() == loginRequest.Email.ToLower())
+                {
+                    foundUser = user;
+                    break;
+                }
+            }
+
+            if (foundUser == null)
+            {
+                WriteUnauthorized(response, "Неверный email или пароль");
+                return;
+            }
+
+            string passwordHash = HashPassword(loginRequest.Password);
+
+            if (foundUser.PasswordHash != passwordHash)
+            {
+                WriteUnauthorized(response, "Неверный email или пароль");
+                return;
+            }
+
+            DateTime expiresAt;
+            string token = GenerateJwtToken(foundUser, out expiresAt);
+
+            var result = new
+            {
+                token = token,
+                email = foundUser.Email,
+                expiresAt = expiresAt
+            };
+
+            string json = JsonSerializer.Serialize(result, GetJsonOptions());
+            WriteJsonResponse(response, json, 200);
         }
 
         static string ReadRequestBody(HttpListenerRequest request)
