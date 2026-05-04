@@ -1,13 +1,13 @@
-﻿using System;
+﻿using Microsoft.IdentityModel.Tokens;
+using System;
 using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.IO;
 using System.Net;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Security.Cryptography;
-using System.Security.Claims;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
 
 namespace SimpleApiServer
 {
@@ -49,18 +49,26 @@ namespace SimpleApiServer
 
         static void Main(string[] args)
         {
+            AppConfig config = LoadConfig();
+            Logger.LogFilePath = config.LogFilePath;
+
             HttpListener listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost:5000/");
+
+            foreach (string url in config.ListenUrls)
+            {
+                listener.Prefixes.Add(url);
+            }
+
             listener.Start();
 
-            Console.WriteLine("Сервер запущен: http://localhost:5000/");
-            Console.WriteLine("Endpoint: GET /api/tasks");
-            Console.WriteLine("Endpoint: GET /api/tasks/{id}");
-            Console.WriteLine("Endpoint: POST /api/tasks");
-            Console.WriteLine("Endpoint: PUT /api/tasks/{id}");
-            Console.WriteLine("Endpoint: POST /api/auth/register");
-            Console.WriteLine("Endpoint: POST /api/auth/login");
-            Console.WriteLine("Для остановки нажмите Ctrl + C");
+            Logger.LogInfo("Сервер запущен");
+            Logger.LogInfo("Endpoint: GET /api/tasks");
+            Logger.LogInfo("Endpoint: GET /api/tasks/{id}");
+            Logger.LogInfo("Endpoint: POST /api/tasks");
+            Logger.LogInfo("Endpoint: PUT /api/tasks/{id}");
+            Logger.LogInfo("Endpoint: POST /api/auth/register");
+            Logger.LogInfo("Endpoint: POST /api/auth/login");
+            Logger.LogInfo("Для остановки нажмите Ctrl + C");
 
             while (true)
             {
@@ -71,7 +79,7 @@ namespace SimpleApiServer
                 string path = request.Url.AbsolutePath;
                 string method = request.HttpMethod;
 
-                Console.WriteLine("Запрос: " + method + " " + path);
+                Logger.LogInfo("Запрос: " + method + " " + path);
 
                 try
                 {
@@ -126,7 +134,7 @@ namespace SimpleApiServer
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Ошибка сервера: " + ex);
+                    Logger.LogError("Ошибка сервера: " + ex.Message);
 
                     var result = new
                     {
@@ -138,6 +146,41 @@ namespace SimpleApiServer
                     WriteJsonResponse(response, json, 500);
                 }
             }
+        }
+
+        static AppConfig LoadConfig()
+        {
+            string configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+
+            if (!File.Exists(configPath))
+            {
+                Logger.LogInfo("Файл appsettings.json не найден, используются настройки по умолчанию");
+
+                return new AppConfig
+                {
+                    ListenUrls = new List<string> { "http://localhost:5000/" },
+                    LogLevel = "Information",
+                    LogFilePath = "logs/app.log"
+                };
+            }
+
+            string json = File.ReadAllText(configPath);
+
+            AppConfig config = JsonSerializer.Deserialize<AppConfig>(json, GetJsonOptions());
+
+            if (config == null || config.ListenUrls == null || config.ListenUrls.Count == 0)
+            {
+                Logger.LogInfo("Некорректный appsettings.json, используются настройки по умолчанию");
+
+                return new AppConfig
+                {
+                    ListenUrls = new List<string> { "http://localhost:5000/" },
+                    LogLevel = "Information",
+                    LogFilePath = "logs/app.log"
+                };
+            }
+
+            return config;
         }
 
         static JsonSerializerOptions GetJsonOptions()
@@ -625,6 +668,7 @@ namespace SimpleApiServer
 
             string json = JsonSerializer.Serialize(result, GetJsonOptions());
             WriteJsonResponse(response, json, 400);
+            Logger.LogInfo("Ответ 400: ошибка валидации");
         }
 
         static void WriteUnauthorized(HttpListenerResponse response, string message)
@@ -637,6 +681,7 @@ namespace SimpleApiServer
 
             string json = JsonSerializer.Serialize(result, GetJsonOptions());
             WriteJsonResponse(response, json, 401);
+            Logger.LogInfo("Ответ 401: " + message);
         }
 
         static void WriteJsonResponse(HttpListenerResponse response, string json, int statusCode)
@@ -660,6 +705,7 @@ namespace SimpleApiServer
 
             string json = JsonSerializer.Serialize(result, GetJsonOptions());
             WriteJsonResponse(response, json, statusCode);
+            Logger.LogInfo("Ответ " + statusCode + ": успешно");
         }
 
         static void WriteError(HttpListenerResponse response, int statusCode, string message, string code)
@@ -676,6 +722,7 @@ namespace SimpleApiServer
 
             string json = JsonSerializer.Serialize(result, GetJsonOptions());
             WriteJsonResponse(response, json, statusCode);
+            Logger.LogInfo("Ответ " + statusCode + ": " + code);
         }
     }
 }
