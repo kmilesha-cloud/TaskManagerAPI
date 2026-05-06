@@ -13,11 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET Framework
+      - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
       - name: Restore NuGet packages
-        run: nuget restore SimpleApiServer.sln
+        run: nuget restore SimpleApiServer/SimpleApiServer.sln
 
       - name: Build
-        run: msbuild SimpleApiServer.sln /p:Configuration=Release
+        run: msbuild SimpleApiServer/SimpleApiServer.sln /p:Configuration=Release
